@@ -174,12 +174,14 @@ generator = create_generator()
 initialize_database()
 app = FastAPI(title="Idealist API", version="0.1.0")
 
-allowed_origins = [origin.strip() for origin in os.getenv(
+allowed_origins = {origin.strip() for origin in os.getenv(
     "CORS_ORIGINS", "http://localhost:3000"
-).split(",") if origin.strip()]
+).split(",") if origin.strip()}
+# Next.js moves to 3001 when 3000 is busy during local development.
+allowed_origins.update({"http://localhost:3000", "http://localhost:3001"})
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
+    allow_origins=sorted(allowed_origins),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

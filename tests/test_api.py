@@ -10,6 +10,19 @@ def test_health_endpoint():
     assert response.json() == {"status": "ok"}
 
 
+def test_cors_allows_nextjs_fallback_port():
+    response = TestClient(api_module.app).options(
+        "/ideas/generate",
+        headers={
+            "Origin": "http://localhost:3001",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:3001"
+
+
 def test_generate_endpoint_passes_category(monkeypatch):
     received = {}
 
