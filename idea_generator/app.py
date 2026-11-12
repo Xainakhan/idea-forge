@@ -2,6 +2,7 @@
 
 import os
 import sqlite3
+from hashlib import sha256
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -44,6 +45,7 @@ class IdeaResponse(BaseModel):
     why_now: str
     is_favorite: bool
     created_at: str
+    generation_source: str
 
 
 class FavoriteResponse(BaseModel):
@@ -70,11 +72,15 @@ def initialize_database() -> None:
                 core_features TEXT NOT NULL,
                 suggested_stack TEXT NOT NULL,
                 why_now TEXT NOT NULL,
+                generation_source TEXT NOT NULL DEFAULT 'ai',
                 is_favorite INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL
             )
             """
         )
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(ideas)")}
+        if "generation_source" not in columns:
+            connection.execute("ALTER TABLE ideas ADD COLUMN generation_source TEXT NOT NULL DEFAULT 'ai'")
 
 
 def row_to_idea(row: sqlite3.Row) -> dict:
@@ -83,14 +89,14 @@ def row_to_idea(row: sqlite3.Row) -> dict:
     return idea
 
 
-def save_idea(idea: dict) -> dict:
+def save_idea(idea: dict, generation_source: str = "ai") -> dict:
     created_at = datetime.now(timezone.utc).isoformat()
     fields = tuple(IDEA_FIELDS.keys())
     values = tuple(idea[field] for field in fields)
     with get_connection() as connection:
         cursor = connection.execute(
-            f"INSERT INTO ideas ({', '.join(fields)}, created_at) VALUES ({', '.join('?' for _ in fields)}, ?)",
-            (*values, created_at),
+            f"INSERT INTO ideas ({', '.join(fields)}, created_at, generation_source) VALUES ({', '.join('?' for _ in fields)}, ?, ?)",
+            (*values, created_at, generation_source),
         )
         row = connection.execute("SELECT * FROM ideas WHERE id = ?", (cursor.lastrowid,)).fetchone()
     return row_to_idea(row)
@@ -135,6 +141,35 @@ def provider_configuration_error() -> Optional[str]:
     return None
 
 
+def generate_fallback_idea(category: str) -> dict:
+    """Generate a useful local idea when an AI provider is unavailable."""
+    focus = category.strip().title() if category else "Business Operations"
+    nouns = ("Flow", "Pilot", "Pulse", "Desk", "Bridge", "Loop", "Ledger", "Signal")
+    jobs = ("follow-ups", "appointments", "quotes", "customer updates", "daily handoffs", "repeat orders")
+    audiences = ("independent local businesses", "small service teams", "owner-operators", "growing agencies")
+    with get_connection() as connection:
+        existing_titles = {row[0].lower() for row in connection.execute("SELECT title FROM ideas")}
+
+    seed = int(sha256(f"{category}|{len(existing_titles)}".encode()).hexdigest(), 16)
+    for offset in range(len(nouns) * len(jobs)):
+        noun = nouns[(seed + offset) % len(nouns)]
+        job = jobs[((seed // len(nouns)) + offset) % len(jobs)]
+        title = f"{focus.replace(' ', '')}{noun}"
+        if offset:
+            title = f"{title} {offset + 1}"
+        if title.lower() not in existing_titles:
+            return {
+                "title": title,
+                "problem": f"{audiences[seed % len(audiences)].capitalize()} lose time managing {job} across chats, calls, and spreadsheets.",
+                "category": category or "business automation",
+                "target_users": audiences[seed % len(audiences)],
+                "core_features": f"A shared {job} board, automated reminders, simple status tracking, and weekly performance summaries.",
+                "suggested_stack": "Next.js, FastAPI, SQLite, and a background job worker.",
+                "why_now": f"{focus} teams need a low-cost way to standardize {job} without adopting a complex enterprise system.",
+            }
+    return generate_fallback_idea(f"{category} {len(existing_titles) + 1}")
+
+
 generator = create_generator()
 initialize_database()
 app = FastAPI(title="Idealist API", version="0.1.0")
@@ -159,20 +194,19 @@ def health() -> dict:
 @app.post("/ideas/generate", response_model=IdeaResponse)
 def generate_idea(request: GenerateIdeaRequest) -> dict:
     configuration_error = provider_configuration_error()
-    if configuration_error:
-        raise HTTPException(status_code=503, detail=configuration_error)
-
     category = request.category.strip() if request.category else "general software business"
-    try:
-        idea = generator.generate_idea(
-            context=f"Focus the idea on this requested category: {category}."
-        )
-    except Exception as error:
-        raise HTTPException(status_code=502, detail="Idea provider request failed.") from error
+    idea = None
+    if not configuration_error:
+        try:
+            idea = generator.generate_idea(
+                context=f"Focus the idea on this requested category: {category}."
+            )
+        except Exception:
+            idea = None
 
-    if not idea:
-        raise HTTPException(status_code=502, detail="Could not generate a distinct idea. Please try again.")
-    return save_idea(idea)
+    if idea:
+        return save_idea(idea, generation_source="ai")
+    return save_idea(generate_fallback_idea(category), generation_source="fallback")
 
 
 @app.get("/ideas", response_model=list[IdeaResponse])

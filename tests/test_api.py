@@ -27,8 +27,8 @@ def test_generate_endpoint_passes_category(monkeypatch):
 
     monkeypatch.setattr(api_module.generator, "generate_idea", fake_generate)
     monkeypatch.setattr(api_module, "provider_configuration_error", lambda: None)
-    monkeypatch.setattr(api_module, "save_idea", lambda idea: {
-        "id": 1, **idea, "is_favorite": False, "created_at": "2026-01-01T00:00:00+00:00"
+    monkeypatch.setattr(api_module, "save_idea", lambda idea, generation_source="ai": {
+        "id": 1, **idea, "is_favorite": False, "created_at": "2026-01-01T00:00:00+00:00", "generation_source": generation_source
     })
     response = TestClient(api_module.app).post("/ideas/generate", json={"category": "car website"})
 
@@ -37,10 +37,17 @@ def test_generate_endpoint_passes_category(monkeypatch):
     assert "car website" in received["context"]
 
 
-def test_generate_endpoint_explains_missing_provider_key(monkeypatch):
+def test_generate_endpoint_uses_fallback_when_provider_is_not_configured(monkeypatch):
     monkeypatch.setattr(api_module, "provider_configuration_error", lambda: "OPENROUTER_API_KEY is not configured in the backend .env file.")
+    monkeypatch.setattr(api_module, "generate_fallback_idea", lambda category: {
+        "title": "FallbackPilot", "problem": "A problem", "category": category,
+        "target_users": "Small teams", "core_features": "Reminders", "suggested_stack": "FastAPI", "why_now": "Useful now"
+    })
+    monkeypatch.setattr(api_module, "save_idea", lambda idea, generation_source="ai": {
+        "id": 1, **idea, "is_favorite": False, "created_at": "2026-01-01T00:00:00+00:00", "generation_source": generation_source
+    })
 
     response = TestClient(api_module.app).post("/ideas/generate", json={})
 
-    assert response.status_code == 503
-    assert response.json()["detail"].startswith("OPENROUTER_API_KEY")
+    assert response.status_code == 200
+    assert response.json()["generation_source"] == "fallback"

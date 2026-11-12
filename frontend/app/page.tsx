@@ -13,6 +13,7 @@ type Idea = {
   why_now: string;
   is_favorite: boolean;
   created_at: string;
+  generation_source: string;
 };
 
 const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000";
@@ -21,7 +22,7 @@ function IdeaCard({ idea, onFavorite }: { idea: Idea; onFavorite: (idea: Idea) =
   return (
     <article className="idea-card">
       <div className="card-head">
-        <div><p className="eyebrow">{idea.category}</p><h2>{idea.title}</h2></div>
+        <div><p className="eyebrow">{idea.category}{idea.generation_source === "fallback" ? " · offline idea" : ""}</p><h2>{idea.title}</h2></div>
         <button className="favorite" onClick={() => onFavorite(idea)} aria-label={`Favorite ${idea.title}`}>
           {idea.is_favorite ? "★" : "☆"}
         </button>
