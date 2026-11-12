@@ -1,5 +1,47 @@
 # Idealist
 
+## Full-stack app
+
+This repository is a monorepo: the FastAPI backend is in `idea_generator/` and
+the Next.js frontend is in `frontend/`. They run as separate local processes,
+but are deployed from the same repository.
+
+### 1. Configure and run the API
+
+Use Python 3.12+ (the current LiteLLM dependency set is not compatible with
+Python 3.15 on Windows). Copy `.env.example` to `.env`, add an OpenRouter API
+key, then run:
+
+~~~powershell
+uv sync --python 3.12
+uv run --python 3.12 uvicorn idea_generator.app:app --reload
+~~~
+
+The API runs at `http://127.0.0.1:8000`. It provides `POST /ideas/generate`,
+`GET /ideas`, and `PATCH /ideas/{id}/favorite`. Generated ideas and favorites
+are saved locally in `data/idealist.db`; Idealist's duplicate-check history is
+stored alongside it.
+
+### 2. Configure and run the frontend
+
+In a second terminal:
+
+~~~powershell
+cd frontend
+Copy-Item .env.local.example .env.local
+npm install
+npm run dev
+~~~
+
+Open `http://localhost:3000`. The browser only receives the public API URL;
+your model provider key stays in the root backend `.env` file.
+
+The default `openrouter/openrouter/free` model lets OpenRouter choose an
+available free model for each request. Free routing is rate-limited, so a
+generation can occasionally need a retry. Its embedding check is disabled by
+default because the free router does not provide a dependable embedding API;
+Idealist still checks prior titles and includes recent ideas in its prompt.
+
 **Idealist** is a flexible Python library that leverages Large Language Models (LLMs) and embeddings to generate and refine creative ideas while avoiding repetition. It's ideal for generating unique names, themes, or any other creative content.
 
 ## Features

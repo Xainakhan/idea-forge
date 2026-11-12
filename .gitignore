@@ -52,6 +52,10 @@ coverage.xml
 
 # Environments
 .env
+data/
+frontend/node_modules/
+frontend/.next/
+frontend/.env.local
 .venv
 env/
 venv/

@@ -21,8 +21,16 @@ dependencies = [
     "pydantic>=1.8.2",
     "scikit-learn>=0.24.2",
     "numpy>=1.21.0",
+    "fastapi>=0.110.0",
+    "uvicorn>=0.27.0",
+    "python-dotenv>=1.0.0",
 ]
-requires-python = ">=3.7"
+requires-python = ">=3.8"
 
 [tool.setuptools.packages.find]
 where = ["."]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+]

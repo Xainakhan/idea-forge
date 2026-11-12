@@ -11,7 +11,7 @@ setup(
     url="https://github.com/yoheinakajima/infinite-idealist",
     license="MIT",
     packages=find_packages(),
-    python_requires=">=3.7",
+    python_requires=">=3.8",
     install_requires=[
         "litellm>=0.2.0",
         "pydantic>=1.8.2",

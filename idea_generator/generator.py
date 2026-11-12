@@ -39,6 +39,7 @@ class IdeaGenerator:
                  anthropic_api_key: Optional[str] = None, 
                  openai_api_key: Optional[str] = None,  # Made OpenAI API key optional
                  max_recent_ideas: int = 20,  # New parameter for maximum recent ideas
+                 enable_embeddings: bool = True,
                  debug: bool = False, 
                  generator_id: Optional[str] = None):
         """
@@ -65,6 +66,7 @@ class IdeaGenerator:
         self.generator_id = generator_id or f"{name.lower().replace(' ', '_')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         self.csv_filename = f"ideas_{self.generator_id}.csv"
         self.max_recent_ideas = max_recent_ideas  # Store the max_recent_ideas
+        self.enable_embeddings = enable_embeddings
 
         # Set API keys based on the model
         if "openai" in self.model.lower():
@@ -135,6 +137,11 @@ class IdeaGenerator:
             self.logger.debug("=== CSV Setup ===")
             self.logger.debug(f"Headers: {self.csv_headers}")
             self.logger.debug(f"Parameters: {parameters}")
+
+        # Initialize storage once. Calling setup_parameters in a running API must
+        # not erase the history used for duplicate detection.
+        if os.path.exists(self.csv_filename):
+            return
 
         # Initialize CSV with headers and metadata
         try:
@@ -207,7 +214,8 @@ class IdeaGenerator:
             self.logger.error(f"Error generating embedding: {e}")
             raise
 
-    def _generate_initial_ideas(self, all_ideas: List[Dict], existing_values: set) -> List[Dict]:
+    def _generate_initial_ideas(self, all_ideas: List[Dict], existing_values: set,
+                                context: Optional[str] = None) -> List[Dict]:
         """Generate initial set of ideas using the LLM."""
         # Limit to the most recent N ideas based on max_recent_ideas
         recent_ideas = all_ideas[-self.max_recent_ideas:] if len(all_ideas) > self.max_recent_ideas else all_ideas
@@ -229,6 +237,7 @@ Do not repeat any {self.unique_field} that has been used before."""},
 {recent_ideas_text}
 
 Generate 3 completely different high-level ideas that are distinct from all previous ideas.
+Additional request context: {context or 'No additional constraints.'}
 Return them in this exact format:
 {{
     "ideas": [
@@ -268,7 +277,7 @@ Return them in this exact format:
 
     def _find_similar_ideas(self, idea: Dict, all_ideas: List[Dict], num_similar: int) -> List[Dict]:
         """Find similar ideas using embedding similarity."""
-        if not all_ideas:
+        if not self.enable_embeddings or not all_ideas:
             return []
 
         idea_text = json.dumps(idea)
@@ -365,14 +374,14 @@ Return it in this exact format:
             self.logger.error(f"Error refining idea: {e}")
             raise
 
-    def generate_idea(self) -> Dict:
+    def generate_idea(self, context: Optional[str] = None) -> Dict:
         """Generate a new idea using the configured parameters."""
         # Load all existing ideas and unique values
         all_ideas, existing_values = self._load_all_ideas()
 
         # Generate initial ideas ensuring uniqueness across all ideas
         try:
-            initial_ideas = self._generate_initial_ideas(all_ideas, existing_values)
+            initial_ideas = self._generate_initial_ideas(all_ideas, existing_values, context)
         except Exception as e:
             self.logger.error(f"Error generating initial ideas: {e}")
             return {}
@@ -402,13 +411,16 @@ Return it in this exact format:
             self.logger.warning("No final idea was refined.")
             return {}
 
-        # Generate embedding for final idea
-        idea_text = json.dumps(final_idea)
-        try:
-            embedding_result = self._get_embedding(idea_text)
-        except Exception as e:
-            self.logger.error(f"Error generating embedding for final idea: {e}")
-            return {}
+        # Embeddings strengthen similarity detection but are optional for
+        # providers (such as OpenRouter's free router) without an embedding API.
+        embedding_result = []
+        if self.enable_embeddings:
+            idea_text = json.dumps(final_idea)
+            try:
+                embedding_result = self._get_embedding(idea_text)
+            except Exception as e:
+                self.logger.error(f"Error generating embedding for final idea: {e}")
+                return {}
 
         # Prepare row as a dictionary
         row = {
