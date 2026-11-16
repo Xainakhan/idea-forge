@@ -234,11 +234,13 @@ app.add_middleware(
 
 
 @app.get("/health")
+@app.get("/api/health", include_in_schema=False)
 def health() -> dict:
     return {"status": "ok"}
 
 
 @app.post("/ideas/generate", response_model=IdeaResponse)
+@app.post("/api/ideas/generate", response_model=IdeaResponse, include_in_schema=False)
 def generate_idea(request: GenerateIdeaRequest) -> dict:
     configuration_error = provider_configuration_error()
     category = request.category.strip() if request.category else "general software business"
@@ -257,6 +259,7 @@ def generate_idea(request: GenerateIdeaRequest) -> dict:
 
 
 @app.get("/ideas", response_model=list[IdeaResponse])
+@app.get("/api/ideas", response_model=list[IdeaResponse], include_in_schema=False)
 def list_ideas(favorites_only: bool = False) -> list[dict]:
     query = "SELECT * FROM ideas"
     if favorites_only:
@@ -268,6 +271,7 @@ def list_ideas(favorites_only: bool = False) -> list[dict]:
 
 
 @app.patch("/ideas/{idea_id}/favorite", response_model=FavoriteResponse)
+@app.patch("/api/ideas/{idea_id}/favorite", response_model=FavoriteResponse, include_in_schema=False)
 def toggle_favorite(idea_id: int) -> dict:
     with get_connection() as connection:
         placeholder = "%s" if using_postgres() else "?"

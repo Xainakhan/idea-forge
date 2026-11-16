@@ -10,6 +10,13 @@ def test_health_endpoint():
     assert response.json() == {"status": "ok"}
 
 
+def test_health_endpoint_accepts_vercel_service_prefix():
+    response = TestClient(api_module.app).get("/api/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
 def test_cors_allows_nextjs_fallback_port():
     response = TestClient(api_module.app).options(
         "/ideas/generate",
