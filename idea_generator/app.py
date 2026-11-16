@@ -12,10 +12,21 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+try:
+    from psycopg import connect as postgres_connect
+    from psycopg.rows import dict_row
+except ImportError:  # Keeps the local SQLite-only development setup usable.
+    postgres_connect = None
+    dict_row = None
+
 from .generator import IdeaGenerator
 
 load_dotenv()
-DATA_DIR = Path(os.getenv("IDEALIST_DATA_DIR", "data"))
+DATABASE_URL = os.getenv("DATABASE_URL")
+# Vercel functions only permit temporary filesystem writes. PostgreSQL holds
+# application data in production; this directory is only used by the generator
+# while it prepares an AI response.
+DATA_DIR = Path(os.getenv("IDEALIST_DATA_DIR", "/tmp/idealist" if os.getenv("VERCEL") else "data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 DATABASE_PATH = DATA_DIR / "idealist.db"
 
@@ -53,7 +64,15 @@ class FavoriteResponse(BaseModel):
     is_favorite: bool
 
 
-def get_connection() -> sqlite3.Connection:
+def using_postgres() -> bool:
+    return bool(DATABASE_URL)
+
+
+def get_connection():
+    if using_postgres():
+        if postgres_connect is None:
+            raise RuntimeError("DATABASE_URL is configured but psycopg is not installed.")
+        return postgres_connect(DATABASE_URL, row_factory=dict_row)
     connection = sqlite3.connect(DATABASE_PATH)
     connection.row_factory = sqlite3.Row
     return connection
@@ -61,29 +80,49 @@ def get_connection() -> sqlite3.Connection:
 
 def initialize_database() -> None:
     with get_connection() as connection:
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS ideas (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                problem TEXT NOT NULL,
-                category TEXT NOT NULL,
-                target_users TEXT NOT NULL,
-                core_features TEXT NOT NULL,
-                suggested_stack TEXT NOT NULL,
-                why_now TEXT NOT NULL,
-                generation_source TEXT NOT NULL DEFAULT 'ai',
-                is_favorite INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL
+        if using_postgres():
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ideas (
+                    id BIGSERIAL PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    problem TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    target_users TEXT NOT NULL,
+                    core_features TEXT NOT NULL,
+                    suggested_stack TEXT NOT NULL,
+                    why_now TEXT NOT NULL,
+                    generation_source TEXT NOT NULL DEFAULT 'ai',
+                    is_favorite BOOLEAN NOT NULL DEFAULT FALSE,
+                    created_at TEXT NOT NULL
+                )
+                """
             )
-            """
-        )
-        columns = {row[1] for row in connection.execute("PRAGMA table_info(ideas)")}
-        if "generation_source" not in columns:
-            connection.execute("ALTER TABLE ideas ADD COLUMN generation_source TEXT NOT NULL DEFAULT 'ai'")
+            connection.execute("ALTER TABLE ideas ADD COLUMN IF NOT EXISTS generation_source TEXT NOT NULL DEFAULT 'ai'")
+        else:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ideas (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT NOT NULL,
+                    problem TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    target_users TEXT NOT NULL,
+                    core_features TEXT NOT NULL,
+                    suggested_stack TEXT NOT NULL,
+                    why_now TEXT NOT NULL,
+                    generation_source TEXT NOT NULL DEFAULT 'ai',
+                    is_favorite INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(ideas)")}
+            if "generation_source" not in columns:
+                connection.execute("ALTER TABLE ideas ADD COLUMN generation_source TEXT NOT NULL DEFAULT 'ai'")
 
 
-def row_to_idea(row: sqlite3.Row) -> dict:
+def row_to_idea(row) -> dict:
     idea = dict(row)
     idea["is_favorite"] = bool(idea["is_favorite"])
     return idea
@@ -94,11 +133,17 @@ def save_idea(idea: dict, generation_source: str = "ai") -> dict:
     fields = tuple(IDEA_FIELDS.keys())
     values = tuple(idea[field] for field in fields)
     with get_connection() as connection:
-        cursor = connection.execute(
-            f"INSERT INTO ideas ({', '.join(fields)}, created_at, generation_source) VALUES ({', '.join('?' for _ in fields)}, ?, ?)",
-            (*values, created_at, generation_source),
-        )
-        row = connection.execute("SELECT * FROM ideas WHERE id = ?", (cursor.lastrowid,)).fetchone()
+        if using_postgres():
+            row = connection.execute(
+                f"INSERT INTO ideas ({', '.join(fields)}, created_at, generation_source) VALUES ({', '.join('%s' for _ in fields)}, %s, %s) RETURNING *",
+                (*values, created_at, generation_source),
+            ).fetchone()
+        else:
+            cursor = connection.execute(
+                f"INSERT INTO ideas ({', '.join(fields)}, created_at, generation_source) VALUES ({', '.join('?' for _ in fields)}, ?, ?)",
+                (*values, created_at, generation_source),
+            )
+            row = connection.execute("SELECT * FROM ideas WHERE id = ?", (cursor.lastrowid,)).fetchone()
     return row_to_idea(row)
 
 
@@ -148,7 +193,7 @@ def generate_fallback_idea(category: str) -> dict:
     jobs = ("follow-ups", "appointments", "quotes", "customer updates", "daily handoffs", "repeat orders")
     audiences = ("independent local businesses", "small service teams", "owner-operators", "growing agencies")
     with get_connection() as connection:
-        existing_titles = {row[0].lower() for row in connection.execute("SELECT title FROM ideas")}
+        existing_titles = {row["title"].lower() if using_postgres() else row[0].lower() for row in connection.execute("SELECT title FROM ideas")}
 
     seed = int(sha256(f"{category}|{len(existing_titles)}".encode()).hexdigest(), 16)
     for offset in range(len(nouns) * len(jobs)):
@@ -225,9 +270,10 @@ def list_ideas(favorites_only: bool = False) -> list[dict]:
 @app.patch("/ideas/{idea_id}/favorite", response_model=FavoriteResponse)
 def toggle_favorite(idea_id: int) -> dict:
     with get_connection() as connection:
-        row = connection.execute("SELECT is_favorite FROM ideas WHERE id = ?", (idea_id,)).fetchone()
+        placeholder = "%s" if using_postgres() else "?"
+        row = connection.execute(f"SELECT is_favorite FROM ideas WHERE id = {placeholder}", (idea_id,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Idea not found.")
         is_favorite = not bool(row["is_favorite"])
-        connection.execute("UPDATE ideas SET is_favorite = ? WHERE id = ?", (is_favorite, idea_id))
+        connection.execute(f"UPDATE ideas SET is_favorite = {placeholder} WHERE id = {placeholder}", (is_favorite, idea_id))
     return {"id": idea_id, "is_favorite": is_favorite}

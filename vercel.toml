@@ -1,0 +1,14 @@
+[services.web]
+root = "frontend/"
+
+[services.api]
+root = "."
+entrypoint = "idea_generator.app:app"
+
+[[rewrites]]
+source = "/api/(.*)"
+destination = { service = "api" }
+
+[[rewrites]]
+source = "/(.*)"
+destination = { service = "web" }
